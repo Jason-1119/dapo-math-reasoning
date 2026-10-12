@@ -1,111 +1,191 @@
-# DAPO vs. Base: Clean Colab Project
+# DAPO Math Reasoning
 
-This English-only project compares Qwen3-1.7B-Base against DAPO-trained LoRA adapters on a fixed random 50-question MATH500 subset.
+A single-GPU experiment in reinforcement learning for mathematical reasoning: train **Qwen3-1.7B-Base** with **DAPO + LoRA**, then compare its sampled answer accuracy against the original base model on held-out **MATH500** questions.
 
-## Start here
+The project includes batched rollouts, inspectable rewards and answers, an isolated Google Colab environment, and paired evaluation. It is a reduced-scale educational implementation, not an exact reproduction of the DAPO or Ctrl-R papers.
 
-1. Extract the new ZIP locally. Upload the **entire dapo-base-compare folder** to My Drive, replacing the previous project code. Keep the tests folder and setup_colab.py.
-2. Open START_HERE.ipynb in Colab. Select a G4 or A100 GPU runtime.
-3. Run cells in order. The first cell mounts Drive and copies code to /content/dapo-base-compare-clean.
-4. The next cell installs a private environment and runs preflight checks. Do not install project requirements in the notebook kernel, import ML packages there, or mix cells from the old notebook.
-5. Run the experiment, then the final cell to copy results to Drive.
+## Reported experiment
 
-The notebook ML scripts always run through /content/dapo-venv/bin/python. Colab's preinstalled torch, torchvision, torchaudio, gradio, diffusers, and gcsfs remain untouched. The isolated venv does not inherit system site-packages, PYTHONPATH, or user site-packages. No kernel restart is required for installation.
+One completed Colab run produced the following results on a fixed 50-question MATH500 subset:
 
-## Dependency checks
+| Model | Correct answers | Accuracy |
+|---|---:|---:|
+| Qwen3-1.7B-Base | 13 / 50 | 26.0% |
+| DAPO + LoRA | 17 / 50 | 34.0% |
 
-setup_colab.py creates an isolated venv using the Colab Python interpreter (supported versions: 3.10-3.13). It installs PyTorch 2.8.0 from the official CUDA 12.8 wheel index, followed by the pinned project requirements. It runs pip check and preflight.py before declaring the environment ready.
+- **Observed difference:** +8.0 percentage points.
+- **Paired bootstrap 95% interval:** −2.0 to +20.0 percentage points.
+- **Question-level changes:** 6 improved, 2 regressed, 42 unchanged.
+- **Completed rollout steps:** 20.
+- **Total experiment time:** approximately 315 minutes, including preparation, training, and final evaluation; environment setup and the separate preliminary check are outside this runner time.
 
-Preflight checks pinned package versions; Transformers and PEFT imports; absence of optional vision/audio packages; CUDA and BF16; a tiny randomly initialized Qwen3 LoRA forward/backward/generation on the GPU; and the complete unit-test suite. Any failed or skipped test stops setup. These checks do not download model weights.
+The interval crosses zero. This is an encouraging observation from one run, but **does not establish a statistically conclusive or reproducible improvement**. The interval measures question-resampling uncertainty; it does not capture variability across training seeds or repeated generations. Fifty questions are a small sample, with each question contributing two percentage points.
 
-This isolates the torchvision::nms conflict encountered with Colab's preinstalled packages. It does not guarantee compatibility with every future driver or runtime. Setup will show a clear failure before expensive training. Actual compatibility is verified on your selected GPU during preflight.
+The values above were transcribed from the completed run report. For an auditable reproduction, retain that run's `run_config.json`, data manifest, evaluation metadata, predictions, and comparison report; the current default configuration alone does not establish a historical run's settings. These scores should not be compared directly with paper results obtained using different training and evaluation protocols.
 
-The venv is reused if Python and requirements match its saved fingerprint. To recover from an interrupted install, rerun setup. To use a fresh environment, pass --venv /content/dapo-venv-new and update PYTHON in the notebook. Do not reuse a manually modified environment with system packages enabled.
+## Method
 
-## Small experiment preset
+DAPO builds on group-relative policy optimization. For each candidate training question, the model samples four responses together. Groups containing both correct and incorrect answers are retained; all-correct and all-incorrect groups are rejected.
 
-The default notebook has no automatic wall-clock cutoff for setup, training, or evaluation. Training runs for the configured 20 rollout steps, then evaluates both models. Approximately two hours is a planning goal, not a deadline or a measured runtime guarantee. Live logs display elapsed time.
+The implementation includes:
 
-The preset uses 512 unique training questions, 20 rollout steps, four accepted groups per step, four sampled answers, and 2048-token completion limits (512-token overlong penalty buffer). Change `steps` and completion limits in config.json to adjust the workload. The last completed checkpoint is evaluated. No zero-update run is accepted as a DAPO result. Dynamic sampling can take longer when few groups contain mixed correct/incorrect answers; its candidate cap still reports failure if no valid group is found.
+- **Clip-Higher:** asymmetric policy-ratio clipping with `clip_low=0.20` and `clip_high=0.28`.
+- **Dynamic sampling:** collect the requested number of accepted groups before updating.
+- **Group-relative advantages:** normalize correctness and length-shaped rewards within each group.
+- **Token-level policy loss:** normalize by the total number of valid response tokens across accepted groups.
+- **Overlong handling:** apply a soft length penalty and exclude hard-truncated responses from policy loss.
+- **LoRA updates:** optimize adapters while keeping original base weights frozen.
 
-Optional CLI flags `--train-minutes` and `--budget-minutes` enable time limits only when explicitly supplied. The notebook supplies neither flag.
+Correctness rewards are +1 for a correct answer and −1 for an incorrect answer, with an additional length penalty. Training samples from temperature 1.0, top-p 1.0, and top-k 0 to match the distribution used for policy scoring. Old-policy log probabilities are fixed across the two update epochs. No learned critic or reward model is required.
 
-Only 50 evaluation questions are used; one question changes accuracy by two percentage points. A short training run can produce small, zero, or negative gains. This is a personal-project demonstration, not an exact reproduction of Ctrl-R Table 2 or strong evidence about reasoning capability.
+Each step collects four accepted groups, then performs two optimizer updates through gradient accumulation. Twenty steps therefore correspond to 40 optimizer updates and 80 accepted groups, which may include repeated questions. Candidate groups rejected during sampling do not contribute to the policy loss. Responses are generated in batches within a question; candidate questions and response backpropagation remain sequential.
 
-## DAPO mechanisms
+## Data
 
-- Clip-Higher: asymmetric ratio clipping [1-0.20, 1+0.28].
-- Dynamic Sampling: reject groups with all-correct or all-incorrect answers and resample until the effective batch is filled.
-- Token-level policy loss: one common denominator over valid response tokens.
-- Overlong handling: linear length penalty and loss masking for hard-truncated responses.
+### Training
 
-Rewards are +1/-1 for correctness plus length penalty. Advantages use group normalization. There is no KL penalty, entropy bonus, learned reward model, HMM, DFA, or Ctrl-R trajectory correction. Old-policy log probabilities remain fixed during two optimizer updates per rollout cycle.
+- Source: [`EleutherAI/hendrycks_math`](https://huggingface.co/datasets/EleutherAI/hendrycks_math).
+- Split: **train only**, across all seven subjects.
+- Difficulty: **Level 1–3**.
+- Selection: 512 unique eligible questions sampled with seed 42.
+- Gold answers: extracted from the final balanced `\boxed{...}` in the provided solution; rows without extractable answers are skipped.
 
-Training generation uses temperature=1, top_p=1, top_k=0 to match the scored policy distribution. The four replies to each prompt are generated together. Different candidate questions and response backpropagation remain sequential. EOS padding is trimmed before scoring. This is a standalone BF16 LoRA implementation, not distributed verl/vLLM.
+The solution and gold answer are used for grading and inspection, not supplied to the model's generation prompt.
 
-## Manual commands after setup
+### Evaluation
+
+- Source: [`HuggingFaceH4/MATH-500`](https://huggingface.co/datasets/HuggingFaceH4/MATH-500).
+- Final comparison: a seeded 50-question subset, identical for both models.
+- Preliminary check: 10 fixed questions from that subset, evaluated before training.
+
+Data preparation excludes whitespace-normalized exact training-question matches against **all 500** MATH500 questions. Dataset revisions and JSONL hashes are recorded. This check does not detect semantic duplicates, paraphrases, or pretraining contamination.
+
+The 10-question check is a quick diagnostic, not training-set accuracy or a reliable benchmark estimate. It must not be used to select training questions, checkpoints, or hyperparameters. Use a separate validation split for tuning.
+
+## Default configuration
+
+| Setting | Value |
+|---|---|
+| Base model | `Qwen/Qwen3-1.7B-Base` |
+| Training questions | 512 MATH train Level 1–3 |
+| Rollout steps | 20 |
+| Accepted groups per step | 4 |
+| Responses per candidate question | 4, generated together |
+| Maximum generated response length | 2,048 tokens for training and evaluation |
+| Maximum prompt length | 768 tokens; longer training prompts are skipped |
+| Overlong penalty buffer | 512 tokens, within the response limit |
+| Learning rate | `5e-6` |
+| Update epochs per rollout step | 2 |
+| LoRA rank / alpha | 16 / 32 |
+| Gradient clipping | 1.0 |
+| Maximum candidate groups per step | 128 |
+| Final evaluation questions | 50 |
+| Seed | 42 |
+
+Edit `config.json` to change training parameters. The candidate-group cap reports a sampling failure if an effective batch cannot be filled; it is not a time limit. **The default notebook sets no setup, training, or experiment deadline.** Optional CLI time-limit flags apply only when explicitly supplied.
+
+Training duration depends on answer length, hardware, and the fraction of accepted groups. Batching improves the generation structure but does not guarantee a particular runtime or accuracy gain.
+
+## Run in Google Colab
+
+1. Download this repository and upload its contents to Google Drive in a folder named `dapo-base-compare`:
+
+   ```text
+   MyDrive/dapo-base-compare/
+   ```
+
+   Keep the Python scripts, `config.json`, `requirements.txt`, and `tests/` together with `colab.ipynb`. If using a different folder name, edit `SOURCE` in the notebook's first cell.
+
+2. Open **`colab.ipynb`** in Colab and select a BF16-capable CUDA GPU. This preset targets the G4 runtime; an A100 can also be used. T4 is not supported by the current BF16 training preset.
+3. Run the mount/copy cell, followed by the environment setup and preflight cell.
+4. Run the **10-question base check** cell to inspect initial accuracy and truncation.
+5. Run the training/comparison cell. It prepares data, trains adapters, evaluates the original base and final adapter checkpoint, and generates the comparison report.
+6. Run the final display/save cell to show the report and copy run artifacts to Drive.
+
+The notebook copies project code into `/content/dapo-base-compare-clean` and executes ML scripts through `/content/dapo-venv/bin/python`. Installation uses pinned dependencies in an isolated environment rather than replacing Colab's preinstalled ML packages. No kernel restart is required by this setup flow.
+
+Preflight checks package versions and imports, CUDA/BF16, a tiny Qwen3 forward/backward pass and batched generation, and the test suite before expensive training. GPU compatibility and available memory must pass on the actual runtime; local syntax checks are not a GPU validation.
+
+### Command-line entry point
+
+After setup, from the project directory:
 
 ```bash
 /content/dapo-venv/bin/python run_budget.py --eval-size 50
 ```
 
-All commands must use the isolated interpreter, including preparation, training, evaluation, and tests. Do not use !python or sys.executable for project ML scripts: those refer to the notebook kernel. setup_colab.py is the only bootstrap script run with the kernel interpreter.
+Despite its historical filename, `run_budget.py` has no default wall-clock limit. The notebook supplies neither `--train-minutes` nor `--budget-minutes`.
 
-## Evaluation and saved outputs
+Use the isolated interpreter for ML scripts. In Colab, the notebook kernel's `sys.executable` is used only to bootstrap `setup_colab.py`.
 
-Base and adapter evaluations share questions, model commit, prompt, grader, seed, generation limits, and package versions. compare.py refuses mismatched protocols or incomplete results.
+## Evaluation protocol
 
-The metric is answer accuracy, not classification precision. One sampled answer per question is used by default; multiple samples report average accuracy, not pass@k. Evaluation uses temperature=1, top_p=.95, top_k=20, and the same 2048-token budget for both models.
+Both models use the same question IDs, resolved base-model revision, prompt, grading function, generation limits, and per-question seeds. Evaluation uses:
 
-- runs/budget-*/budget_status.json: completion/failure/time-limit status and elapsed time.
-- runs/budget-*/dapo/latest_checkpoint.json: last complete training checkpoint.
-- runs/budget-*/dapo/train_log.jsonl: step timing, truncation, acceptance, and GPU memory.
-- results/budget-*/base/predictions.jsonl and dapo/predictions.jsonl: answers and per-question correctness.
-- results/budget-*/comparison/report.md: accuracy change in percentage points, paired bootstrap interval, and improved/regressed counts.
+- One sampled response per question.
+- Temperature 1.0, top-p 0.95, top-k 20.
+- A maximum of 2,048 generated tokens.
+- Mathematical equivalence grading with `math-verify` after final-answer extraction.
 
-An interval crossing zero is inconclusive. It does not cover variability across independent training seeds. Hyperparameter selection needs a separate validation set; do not choose checkpoints using test scores. Checkpoints contain adapter, optimizer, and RNG states. Only load your own trainer.pt files.
+The metric is **sampled answer accuracy**, not classification precision or pass@k. With multiple evaluation samples, the implementation reports mean sampled accuracy. The final completed checkpoint is evaluated rather than selecting the best checkpoint using test scores. `compare.py` rejects mismatched protocols or incomplete paired results.
 
-## Data and limitations
+A fixed random seed supports reproducibility but does not eliminate all numerical or sampling variability across hardware and software environments.
 
-Training source: EleutherAI/hendrycks_math, train split, Level 1-3. Evaluation source: HuggingFaceH4/MATH-500. Data preparation reads train-only Parquet shards and deduplicates training questions, freezes dataset revisions and JSONL hashes, removes whitespace-normalized exact matches against all 500 test questions, then freezes a seeded evaluation subset.
+## Progress and artifacts
 
-This does not detect paraphrases, integer-answer transformations, or pretraining contamination. Publication-quality claims need stronger decontamination and independent tests. The preset differs from the paper in LoRA updates, batch/data size, training steps, completion lengths, and checkpoint selection. config_full.json retains the previous larger settings and is intended for a larger experiment.
+Live output displays stages, elapsed time, heartbeat messages, questions, gold answers, all four generated responses, extracted final answers, correctness, truncation, group acceptance, and update epochs. Batched responses appear once the group's generation call completes. A heartbeat indicates that the runner is active, not that parameters have been updated.
 
-If dynamic sampling cannot fill a batch, inspect outputs and grading before spending more GPU time. A weak base model with short responses may produce mostly incorrect groups. Removing filtering changes DAPO. Adding SFT warmup requires a base/SFT-only/SFT+DAPO comparison to isolate RL gains.
+| Artifact | Purpose |
+|---|---|
+| `runs/budget-*/data/manifest.json` | Dataset revisions, filters, counts, and file hashes |
+| `runs/budget-*/budget_status.json` | Stage, completion status, elapsed time, and completed steps |
+| `runs/budget-*/dapo/run_config.json` | Resolved training configuration |
+| `runs/budget-*/dapo/train_log.jsonl` | Acceptance, rewards, throughput, gradients, truncation, and GPU memory |
+| `runs/budget-*/dapo/rollout_audit.jsonl` | Full candidate responses, gold answers, and grading outcomes |
+| `runs/budget-*/dapo/latest_checkpoint.json` | Last saved checkpoint location |
+| `results/budget-*/base/` and `dapo/` | Predictions, evaluation metadata, and accuracy summaries |
+| `results/budget-*/comparison/report.md` | Paired accuracy comparison and bootstrap interval |
 
-## Validation status
+The final cell saves artifacts under `MyDrive/dapo-experiments/<run-id>/`. Preliminary checks are saved separately under `base-check-*`. Colab's local `/content` storage is temporary; run the save cell before ending the session. On failure, partial files can still be saved, but a completed comparison is not claimed.
 
-Local Python and notebook syntax, isolated-environment setup logic, budget-stop behavior, archive structure, and CPU tests were checked. The delivery host has no CUDA/PyTorch/math-verify; actual wheel installation and GPU training were not performed there. Colab preflight must pass all dependency, GPU, and unit checks before training. No measured model accuracy is included and no gain is guaranteed.
+## Repository structure
+
+```text
+colab.ipynb           Colab setup, preliminary check, training, and results
+config.json           Default experiment settings
+requirements.txt      Pinned dependencies
+setup_colab.py        Isolated environment installation
+preflight.py          Dependency, CUDA, and smoke checks
+prepare.py            MATH Level 1–3 selection and held-out evaluation data
+train.py              DAPO + LoRA sampling and optimization
+common.py             Prompts, grading, generation, and token log probabilities
+dapo_math.py          Advantages, clipping objective, and length penalty
+evaluate.py           Base or adapter evaluation
+compare.py            Paired comparison and uncertainty estimates
+run_budget.py         Experiment orchestration; optional time limits
+live_process.py       Streaming subprocess output and logs
+tests/                Implementation checks
+```
+
+`config_full.json`, if retained, is an alternative configuration rather than the default used by the notebook. `colab.ipynb` is the documented entry point; a duplicate `START_HERE.ipynb` is not required.
+
+## Limitations and next steps
+
+- One small evaluation subset and one training run are insufficient to establish a general improvement.
+- Low base-model correctness can make dynamic sampling expensive. Inspect full responses and grading before changing datasets or spending more GPU time.
+- LoRA, small batches, short training, modified training data, and response limits differ from the original paper setups.
+- Rule-based answer extraction can fail on missing or malformed final answers; the audit log supports manual inspection.
+- The single-GPU implementation does not include distributed rollout engines or Ctrl-R trajectory control.
+
+Useful next experiments include full MATH500 evaluation of the saved checkpoint, independent training seeds, and controlled ablations of sampling, training difficulty, and adapter settings using a separate validation set.
 
 ## References
 
-- [DAPO paper](https://arxiv.org/abs/2503.14476)
-- [Ctrl-R paper](https://arxiv.org/abs/2603.01641)
-- [Official CUDA wheels](https://download.pytorch.org/whl/cu128)
-- [Python virtual environments](https://docs.python.org/3/library/venv.html)
+- [DAPO: An Open-Source LLM Reinforcement Learning System at Scale](https://arxiv.org/abs/2503.14476)
+- [Official DAPO implementation](https://github.com/BytedTsinghua-SIA/DAPO)
+- [Learning Structured Reasoning via Tractable Trajectory Control](https://arxiv.org/abs/2603.01641)
+- [Qwen3-1.7B-Base](https://huggingface.co/Qwen/Qwen3-1.7B-Base)
+- [MATH training dataset](https://huggingface.co/datasets/EleutherAI/hendrycks_math)
+- [MATH500 evaluation dataset](https://huggingface.co/datasets/HuggingFaceH4/MATH-500)
 
-Follow upstream dependency, dataset, and model licenses.
-
-## Live progress
-
-The experiment cell now forwards merged stdout/stderr from all child scripts, saves console.log inside the run folder and notebook_console.log at the project root, and emits a heartbeat every 30 seconds. Stage banners identify data preparation, training, base evaluation, adapter evaluation, and reporting. Training prints candidate groups, individual answer lengths/correctness, and update epochs before the per-step summary. A heartbeat confirms that the process is running; it does not prove useful training progress. Interrupting the notebook runner terminates its process group. Live forwarding cannot be retroactively attached to a previously launched run.
-
-## G4 batched preset
-
-Version: MATH-L123-G4-2048-v3. Training uses 20 steps, four accepted question groups per step, and four replies generated together per candidate question. Both evaluation response limits remain 2048 tokens. There is no default setup, training, or experiment time cutoff. Evaluation remains the same 50-question subset for comparability.
-
-The candidate cap is 128 groups per step (a sampling failure guard, not a time limit). This is more training work than the previous one-group preset; batching does not guarantee a shorter complete run or higher accuracy. Gradient accumulation keeps one optimizer update per epoch, with one token denominator across all four accepted groups.
-
-rollout_audit.jsonl records questions, gold answers, complete responses, extracted answers, and grading results for every sampled reply. train_log.jsonl adds acceptance rate, mean reward, missing-answer rate, sampling throughput, pre-clipping gradient norms, and token-weighted mean absolute policy-ratio deviation before each update. These help distinguish slow generation, difficult questions, formatting failures, and policy movement. No automatic difficulty filtering is applied; inspect the audit before changing training data. Do not select training data using evaluation questions.
-
-Use a new run for this preset; old one-group checkpoints have a different training configuration. Lower num_generations if a batched rollout runs out of memory (keep at least two). This preset still requires BF16 and is not configured for T4.
-
-Training now prints each question, dataset gold answer, four complete responses, extracted final answers, correctness, truncation, and group acceptance/rejection. Batched responses appear after the generation call completes. Gold answers are displayed for inspection and grading only; they are not added to model prompts.
-
-## MATH Level 1-3 training preset
-
-This version replaces DAPO-Math-17K with EleutherAI/hendrycks_math train-only shards across all seven subjects. It filters to Level 1-3, extracts the last balanced boxed gold answer from the solution, removes exact matches to all 500 MATH500 questions, and randomly selects 512 eligible unique training rows using the configured seed. Dataset commits, selection metadata, and file hashes are saved. Solutions are not included in policy prompts.
-
-After setup, the notebook has one code cell evaluating the original base on 10 fixed questions from the seeded 50-question MATH500 subset. It prints accuracy and truncation rate and saves full predictions to Drive. This diagnostic is distinct from training-data success rate and does not select training data. The final comparison still evaluates both models on all 50 selected questions. Ten questions are too few to establish a reliable improvement.
-
-Keep 2048-token limits, four batched replies/question, four accepted groups/step, 20 steps, verbose rollout logs, and no default time cutoff. Start a fresh run when changing training datasets.
+Model weights, datasets, and dependencies retain their respective licenses. Consult their source repositories before redistributing them. This README does not grant a license to third-party materials or replace a repository-level license for this project's code.
