@@ -92,57 +92,12 @@ Training duration depends on answer length, hardware, and the fraction of accept
 
    Keep the Python scripts, `config.json`, `requirements.txt`, and `tests/` together with `colab.ipynb`. If using a different folder name, edit `SOURCE` in the notebook's first cell.
 
-2. Open **`colab.ipynb`** in Colab and select a BF16-capable CUDA GPU. This preset targets the G4 runtime; an A100 can also be used. T4 is not supported by the current BF16 training preset.
+2. Open **`colab.ipynb`** in Colab and select a BF16-capable CUDA GPU. 
 3. Run the mount/copy cell, followed by the environment setup and preflight cell.
 4. Run the **10-question base check** cell to inspect initial accuracy and truncation.
 5. Run the training/comparison cell. It prepares data, trains adapters, evaluates the original base and final adapter checkpoint, and generates the comparison report.
 6. Run the final display/save cell to show the report and copy run artifacts to Drive.
 
-The notebook copies project code into `/content/dapo-base-compare-clean` and executes ML scripts through `/content/dapo-venv/bin/python`. Installation uses pinned dependencies in an isolated environment rather than replacing Colab's preinstalled ML packages. No kernel restart is required by this setup flow.
-
-Preflight checks package versions and imports, CUDA/BF16, a tiny Qwen3 forward/backward pass and batched generation, and the test suite before expensive training. GPU compatibility and available memory must pass on the actual runtime; local syntax checks are not a GPU validation.
-
-### Command-line entry point
-
-After setup, from the project directory:
-
-```bash
-/content/dapo-venv/bin/python run_budget.py --eval-size 50
-```
-
-Despite its historical filename, `run_budget.py` has no default wall-clock limit. The notebook supplies neither `--train-minutes` nor `--budget-minutes`.
-
-Use the isolated interpreter for ML scripts. In Colab, the notebook kernel's `sys.executable` is used only to bootstrap `setup_colab.py`.
-
-## Evaluation protocol
-
-Both models use the same question IDs, resolved base-model revision, prompt, grading function, generation limits, and per-question seeds. Evaluation uses:
-
-- One sampled response per question.
-- Temperature 1.0, top-p 0.95, top-k 20.
-- A maximum of 2,048 generated tokens.
-- Mathematical equivalence grading with `math-verify` after final-answer extraction.
-
-The metric is **sampled answer accuracy**, not classification precision or pass@k. With multiple evaluation samples, the implementation reports mean sampled accuracy. The final completed checkpoint is evaluated rather than selecting the best checkpoint using test scores. `compare.py` rejects mismatched protocols or incomplete paired results.
-
-A fixed random seed supports reproducibility but does not eliminate all numerical or sampling variability across hardware and software environments.
-
-## Progress and artifacts
-
-Live output displays stages, elapsed time, heartbeat messages, questions, gold answers, all four generated responses, extracted final answers, correctness, truncation, group acceptance, and update epochs. Batched responses appear once the group's generation call completes. A heartbeat indicates that the runner is active, not that parameters have been updated.
-
-| Artifact | Purpose |
-|---|---|
-| `runs/budget-*/data/manifest.json` | Dataset revisions, filters, counts, and file hashes |
-| `runs/budget-*/budget_status.json` | Stage, completion status, elapsed time, and completed steps |
-| `runs/budget-*/dapo/run_config.json` | Resolved training configuration |
-| `runs/budget-*/dapo/train_log.jsonl` | Acceptance, rewards, throughput, gradients, truncation, and GPU memory |
-| `runs/budget-*/dapo/rollout_audit.jsonl` | Full candidate responses, gold answers, and grading outcomes |
-| `runs/budget-*/dapo/latest_checkpoint.json` | Last saved checkpoint location |
-| `results/budget-*/base/` and `dapo/` | Predictions, evaluation metadata, and accuracy summaries |
-| `results/budget-*/comparison/report.md` | Paired accuracy comparison and bootstrap interval |
-
-The final cell saves artifacts under `MyDrive/dapo-experiments/<run-id>/`. Preliminary checks are saved separately under `base-check-*`. Colab's local `/content` storage is temporary; run the save cell before ending the session. On failure, partial files can still be saved, but a completed comparison is not claimed.
 
 ## Repository structure
 
@@ -163,17 +118,7 @@ live_process.py       Streaming subprocess output and logs
 tests/                Implementation checks
 ```
 
-`config_full.json`, if retained, is an alternative configuration rather than the default used by the notebook. `colab.ipynb` is the documented entry point; a duplicate `START_HERE.ipynb` is not required.
-
-## Limitations and next steps
-
-- One small evaluation subset and one training run are insufficient to establish a general improvement.
-- Low base-model correctness can make dynamic sampling expensive. Inspect full responses and grading before changing datasets or spending more GPU time.
-- LoRA, small batches, short training, modified training data, and response limits differ from the original paper setups.
-- Rule-based answer extraction can fail on missing or malformed final answers; the audit log supports manual inspection.
-- The single-GPU implementation does not include distributed rollout engines or Ctrl-R trajectory control.
-
-Useful next experiments include full MATH500 evaluation of the saved checkpoint, independent training seeds, and controlled ablations of sampling, training difficulty, and adapter settings using a separate validation set.
+`config_full.json`, if retained, is an alternative configuration rather than the default used by the notebook. `colab.ipynb` is the documented entry point.
 
 ## References
 
