@@ -128,5 +128,3 @@ tests/                Implementation checks
 - [Qwen3-1.7B-Base](https://huggingface.co/Qwen/Qwen3-1.7B-Base)
 - [MATH training dataset](https://huggingface.co/datasets/EleutherAI/hendrycks_math)
 - [MATH500 evaluation dataset](https://huggingface.co/datasets/HuggingFaceH4/MATH-500)
-
-Model weights, datasets, and dependencies retain their respective licenses. Consult their source repositories before redistributing them. This README does not grant a license to third-party materials or replace a repository-level license for this project's code.
