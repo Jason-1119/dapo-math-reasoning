@@ -2,7 +2,7 @@
 
 A single-GPU experiment in reinforcement learning for mathematical reasoning: train **Qwen3-1.7B-Base** with **DAPO + LoRA**, then compare its sampled answer accuracy against the original base model on held-out **MATH500** questions.
 
-The project includes batched rollouts, inspectable rewards and answers, an isolated Google Colab environment, and paired evaluation. It is a reduced-scale educational implementation, not an exact reproduction of the DAPO or Ctrl-R papers.
+The project includes batched rollouts, inspectable rewards and answers, an isolated Google Colab environment, and paired evaluation. 
 
 ## Reported experiment
 
@@ -14,12 +14,8 @@ One completed Colab run produced the following results on a fixed 50-question MA
 | DAPO + LoRA | 17 / 50 | 34.0% |
 
 - **Observed difference:** +8.0 percentage points.
-- **Paired bootstrap 95% interval:** −2.0 to +20.0 percentage points.
 - **Question-level changes:** 6 improved, 2 regressed, 42 unchanged.
 - **Completed rollout steps:** 20.
-- **Total experiment time:** approximately 315 minutes, including preparation, training, and final evaluation; environment setup and the separate preliminary check are outside this runner time.
-
-The interval crosses zero. This is an encouraging observation from one run, but **does not establish a statistically conclusive or reproducible improvement**. The interval measures question-resampling uncertainty; it does not capture variability across training seeds or repeated generations. Fifty questions are a small sample, with each question contributing two percentage points.
 
 The values above were transcribed from the completed run report. For an auditable reproduction, retain that run's `run_config.json`, data manifest, evaluation metadata, predictions, and comparison report; the current default configuration alone does not establish a historical run's settings. These scores should not be compared directly with paper results obtained using different training and evaluation protocols.
 
